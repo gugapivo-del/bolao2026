@@ -5,6 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Bolão 2026 ⚽</title>
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@700;800&display=swap" rel="stylesheet">
+<script type="module">
+// ============================================================
+// COLE AQUI AS SUAS CREDENCIAIS DO FIREBASE
+// ============================================================
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, get, onValue, update } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyCbNUmjWGz_z8HdxwQ37B1dTEr9JBAIwow",
+  authDomain: "bolao2026-novo.firebaseapp.com",
+  databaseURL: "https://bolao2026-novo-default-rtdb.firebaseio.com",
+  projectId: "bolao2026-novo",
+  storageBucket: "bolao2026-novo.firebasestorage.app",
+  messagingSenderId: "894516799655",
+  appId: "1:894516799655:web:87ee6f98b0a7f977c99382"
+};
+
+const app = initializeApp(firebaseConfig);
+const db  = getDatabase(app);
+
+// Expõe funções Firebase para o código global
+window._fbSet    = (path, val)       => set(ref(db, path), val);
+window._fbGet    = (path)            => get(ref(db, path)).then(s => s.exists() ? s.val() : null);
+window._fbUpdate = (path, val)       => update(ref(db, path), val);
+window._fbListen = (path, cb)        => onValue(ref(db, path), s => cb(s.exists() ? s.val() : null));
+window._fbReady  = true;
+
+// Dispara init quando Firebase estiver pronto
+document.dispatchEvent(new Event('firebase-ready'));
+</script>
 <style>
 :root {
   --green: #006847;
@@ -739,6 +769,13 @@ select option { background: #1a2b1e; }
 <body>
 <div class="page">
 
+<!-- LOADING OVERLAY -->
+<div id="loadingOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:999;align-items:center;justify-content:center;flex-direction:column;gap:16px;">
+  <div style="font-size:48px;animation:spin 1s linear infinite">⚽</div>
+  <div style="font-family:'Bebas Neue';font-size:24px;color:var(--gold);letter-spacing:3px">Carregando...</div>
+</div>
+<style>@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}</style>
+
 <!-- HEADER -->
 <header>
   <div class="header-inner">
@@ -1014,25 +1051,12 @@ function generateMatches() {
 }
 
 // ===========================
-// STORAGE WRAPPER
+// FIREBASE HELPERS
 // ===========================
-const KEYS = {
-  MATCHES: 'bolao2026:matches',
-  USERS: 'bolao2026:users',
-  PALPITES: (u) => `bolao2026:palpites:${u}`
-};
-
-async function storageGet(key, shared=true) {
-  try {
-    const r = await window.storage.get(key, shared);
-    return r ? JSON.parse(r.value) : null;
-  } catch(e) { return null; }
-}
-async function storageSet(key, val, shared=true) {
-  try {
-    await window.storage.set(key, JSON.stringify(val), shared);
-  } catch(e) { console.warn('storage error', e); }
-}
+async function fbGet(path)         { return window._fbGet(path); }
+async function fbSet(path, val)    { return window._fbSet(path, val); }
+async function fbUpdate(path, val) { return window._fbUpdate(path, val); }
+function fbListen(path, cb)        { window._fbListen(path, cb); }
 
 // ===========================
 // STATE
@@ -1049,33 +1073,48 @@ let activeGroupFilter = 'ALL';
 // INIT
 // ===========================
 async function init() {
-  // Load matches (shared — admin updates here)
-  const savedMatches = await storageGet(KEYS.MATCHES);
+  // Mostra loading
+  document.getElementById('loadingOverlay').style.display = 'flex';
+
+  // Carrega placares oficiais
+  const savedMatches = await fbGet('matches');
   if (savedMatches) {
-    // Merge official results back in
-    savedMatches.forEach(sm => {
+    Object.values(savedMatches).forEach(sm => {
       const m = matches.find(x => x.id === sm.id);
-      if (m) {
-        m.homeScore = sm.homeScore;
-        m.awayScore = sm.awayScore;
-      }
+      if (m) { m.homeScore = sm.homeScore; m.awayScore = sm.awayScore; }
     });
   }
 
-  // Load users
-  const savedUsers = await storageGet(KEYS.USERS);
+  // Carrega usuários
+  const savedUsers = await fbGet('users');
   if (savedUsers) users = savedUsers;
 
-  // Check session
-  const session = sessionStorage.getItem('bolao_user');
+  // Listener em tempo real: atualiza placares e usuários para todos
+  fbListen('matches', data => {
+    if (!data) return;
+    Object.values(data).forEach(sm => {
+      const m = matches.find(x => x.id === sm.id);
+      if (m) { m.homeScore = sm.homeScore ?? null; m.awayScore = sm.awayScore ?? null; }
+    });
+    renderGroups(); renderRanking(); renderHomeRanking(); updateStats(); populateAdminSelect();
+  });
+  fbListen('users', data => {
+    if (!data) return;
+    users = data;
+    renderRanking(); renderHomeRanking(); renderAdminUsers(); updateStats();
+  });
+
+  // Sessão local
+  const session = localStorage.getItem('bolao_user');
   if (session) {
     const u = JSON.parse(session);
-    if (users[u.username]) {
+    if (users[u.username] || ADMINS[u.username]) {
       currentUser = u;
-      myPalpites = await storageGet(KEYS.PALPITES(u.username)) || {};
+      if (!u.isAdmin) myPalpites = (await fbGet('palpites/' + u.username)) || {};
     }
   }
 
+  document.getElementById('loadingOverlay').style.display = 'none';
   renderUI();
   populateAdminSelect();
   updateStats();
@@ -1379,34 +1418,29 @@ async function doLogin() {
   const p = document.getElementById('loginPass').value;
   const err = document.getElementById('authError');
 
-  // Check admin
+  // Admin
   if (ADMINS[u]) {
     if (ADMINS[u].password === p) {
       currentUser = { username: u, isAdmin: true };
-      sessionStorage.setItem('bolao_user', JSON.stringify(currentUser));
+      localStorage.setItem('bolao_user', JSON.stringify(currentUser));
       closeModal('loginModal');
       renderUI();
       showToast('Bem-vindo, Admin ' + u + '! ⚙️');
       return;
     }
+    err.textContent = 'Senha incorreta.'; err.style.display = 'block'; return;
   }
-  // Check regular user
-  if (users[u]) {
-    if (users[u].password === p) {
-      currentUser = { username: u, isAdmin: false };
-      sessionStorage.setItem('bolao_user', JSON.stringify(currentUser));
-      myPalpites = await storageGet(KEYS.PALPITES(u)) || {};
-      closeModal('loginModal');
-      renderUI();
-      showToast('Bem-vindo, ' + u + '! ⚽');
-      return;
-    }
-    err.textContent = 'Senha incorreta.';
-    err.style.display = 'block';
-    return;
-  }
-  err.textContent = 'Usuário não encontrado.';
-  err.style.display = 'block';
+  // Usuário comum — busca do Firebase
+  const userData = await fbGet('users/' + u);
+  if (!userData) { err.textContent = 'Usuário não encontrado.'; err.style.display = 'block'; return; }
+  if (userData.password !== p) { err.textContent = 'Senha incorreta.'; err.style.display = 'block'; return; }
+
+  currentUser = { username: u, isAdmin: false };
+  localStorage.setItem('bolao_user', JSON.stringify(currentUser));
+  myPalpites = (await fbGet('palpites/' + u)) || {};
+  closeModal('loginModal');
+  renderUI();
+  showToast('Bem-vindo, ' + u + '! ⚽');
 }
 
 async function doRegister() {
@@ -1416,15 +1450,20 @@ async function doRegister() {
   const err = document.getElementById('authError');
 
   if (!u || u.length < 3) { err.textContent = 'Nome deve ter ao menos 3 caracteres.'; err.style.display='block'; return; }
-  if (ADMINS[u] || users[u]) { err.textContent = 'Este nome já está em uso.'; err.style.display='block'; return; }
+  if (ADMINS[u]) { err.textContent = 'Este nome já está em uso.'; err.style.display='block'; return; }
   if (p.length < 4) { err.textContent = 'Senha deve ter ao menos 4 caracteres.'; err.style.display='block'; return; }
   if (p !== p2) { err.textContent = 'As senhas não coincidem.'; err.style.display='block'; return; }
 
+  // Verifica se já existe no Firebase
+  const existing = await fbGet('users/' + u);
+  if (existing) { err.textContent = 'Este nome já está em uso.'; err.style.display='block'; return; }
+
+  // Salva no Firebase
+  await fbSet('users/' + u, { password: p, isAdmin: false, pts: 0, exact: 0, winner: 0 });
   users[u] = { password: p, isAdmin: false, pts: 0, exact: 0, winner: 0 };
-  await storageSet(KEYS.USERS, users);
 
   currentUser = { username: u, isAdmin: false };
-  sessionStorage.setItem('bolao_user', JSON.stringify(currentUser));
+  localStorage.setItem('bolao_user', JSON.stringify(currentUser));
   myPalpites = {};
   closeModal('loginModal');
   renderUI();
@@ -1434,7 +1473,7 @@ async function doRegister() {
 function doLogout() {
   currentUser = null;
   myPalpites = {};
-  sessionStorage.removeItem('bolao_user');
+  localStorage.removeItem('bolao_user');
   renderUI();
   showToast('Até logo! 👋');
 }
@@ -1454,20 +1493,14 @@ async function savePalpites() {
     matches.filter(m => m.group === g).forEach(m => {
       const hi = document.getElementById('ph_' + m.id);
       const ai = document.getElementById('pa_' + m.id);
-      if (hi && ai) {
-        const hv = hi.value;
-        const av = ai.value;
-        if (hv !== '' && av !== '') {
-          myPalpites[m.id] = { home: parseInt(hv), away: parseInt(av) };
-        }
+      if (hi && ai && hi.value !== '' && ai.value !== '') {
+        myPalpites[m.id] = { home: parseInt(hi.value), away: parseInt(ai.value) };
       }
     });
   });
 
-  await storageSet(KEYS.PALPITES(currentUser.username), myPalpites);
-
-  // Recalc points
-  recalcUserPoints(currentUser.username);
+  await fbSet('palpites/' + currentUser.username, myPalpites);
+  await recalcUserPoints(currentUser.username);
 
   pendingChanges = false;
   document.getElementById('saveIndicator').classList.remove('visible');
@@ -1476,10 +1509,10 @@ async function savePalpites() {
 }
 
 async function recalcUserPoints(username) {
-  const palpites = await storageGet(KEYS.PALPITES(username)) || {};
+  const palpites = (await fbGet('palpites/' + username)) || {};
   let pts = 0, exact = 0, winner = 0;
   matches.forEach(m => {
-    if (m.homeScore === null) return;
+    if (m.homeScore === null || m.homeScore === undefined) return;
     const ph = palpites[m.id];
     if (!ph) return;
     const p = calcPoints(ph.home, ph.away, m.homeScore, m.awayScore);
@@ -1487,12 +1520,8 @@ async function recalcUserPoints(username) {
     if (p === 5) exact++;
     if (p === 3) winner++;
   });
-  if (users[username]) {
-    users[username].pts = pts;
-    users[username].exact = exact;
-    users[username].winner = winner;
-    await storageSet(KEYS.USERS, users);
-  }
+  await fbUpdate('users/' + username, { pts, exact, winner });
+  if (users[username]) { users[username].pts = pts; users[username].exact = exact; users[username].winner = winner; }
 }
 
 // ===========================
@@ -1518,29 +1547,22 @@ async function saveOfficialResult() {
   if (!id) return;
   const h = parseInt(document.getElementById('adminHomeScore').value);
   const a = parseInt(document.getElementById('adminAwayScore').value);
-  if (isNaN(h) || isNaN(a) || h < 0 || a < 0) {
-    showToast('⚠️ Insira um placar válido!'); return;
-  }
+  if (isNaN(h) || isNaN(a) || h < 0 || a < 0) { showToast('⚠️ Insira um placar válido!'); return; }
   const m = matches.find(x => x.id === id);
   if (!m) return;
-  m.homeScore = h;
-  m.awayScore = a;
+  m.homeScore = h; m.awayScore = a;
 
-  // Save matches to shared storage
-  await storageSet(KEYS.MATCHES, matches.map(x => ({ id: x.id, homeScore: x.homeScore, awayScore: x.awayScore })));
+  // Salva no Firebase
+  await fbSet('matches/' + id, { id, homeScore: h, awayScore: a });
 
-  // Recalc ALL users
+  // Recalcula pontos de todos os usuários
   const allUsers = Object.keys(users);
   for (const u of allUsers) {
     if (!users[u].isAdmin) await recalcUserPoints(u);
   }
 
   populateAdminSelect();
-  renderGroups();
-  renderRanking();
-  renderHomeRanking();
-  updateStats();
-  renderAdminUsers();
+  renderGroups(); renderRanking(); renderHomeRanking(); updateStats(); renderAdminUsers();
   showToast(`✅ Resultado ${m.home} ${h}×${a} ${m.away} confirmado!`);
 }
 
@@ -1550,19 +1572,17 @@ async function resetOfficialResult() {
   if (!id) return;
   const m = matches.find(x => x.id === id);
   if (!m) return;
-  m.homeScore = null;
-  m.awayScore = null;
-  await storageSet(KEYS.MATCHES, matches.map(x => ({ id: x.id, homeScore: x.homeScore, awayScore: x.awayScore })));
+  m.homeScore = null; m.awayScore = null;
+
+  await fbSet('matches/' + id, { id, homeScore: null, awayScore: null });
+
   const allUsers = Object.keys(users);
   for (const u of allUsers) {
     if (!users[u].isAdmin) await recalcUserPoints(u);
   }
   document.getElementById('adminHomeScore').value = '';
   document.getElementById('adminAwayScore').value = '';
-  populateAdminSelect();
-  renderGroups();
-  renderRanking();
-  updateStats();
+  populateAdminSelect(); renderGroups(); renderRanking(); updateStats();
   showToast('🗑 Resultado removido.');
 }
 
@@ -1586,9 +1606,11 @@ document.getElementById('loginModal').addEventListener('click', function(e) {
 });
 
 // ===========================
-// BOOT
+// BOOT — aguarda Firebase carregar
 // ===========================
-init();
+document.addEventListener('firebase-ready', () => init());
+// Fallback caso o evento já tenha disparado
+if (window._fbReady) init();
 </script>
 </div>
 </body>
