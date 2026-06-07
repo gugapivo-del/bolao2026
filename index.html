@@ -1076,6 +1076,22 @@ async function init() {
   // Mostra loading
   document.getElementById('loadingOverlay').style.display = 'flex';
 
+  // Teste de conexão Firebase
+  try {
+    await fbSet('_ping', Date.now());
+    console.log('✅ Firebase conectado com sucesso!');
+  } catch(e) {
+    console.error('❌ Firebase ERRO de conexão:', e);
+    document.getElementById('loadingOverlay').innerHTML = `
+      <div style="text-align:center;padding:20px">
+        <div style="font-size:48px">❌</div>
+        <div style="font-family:'Bebas Neue';font-size:24px;color:#ff4466;letter-spacing:2px;margin:16px 0">Erro de Conexão</div>
+        <div style="color:#aaa;font-size:14px;max-width:300px">Não foi possível conectar ao banco de dados. Verifique as regras do Firebase Realtime Database.</div>
+      </div>`;
+    document.getElementById('loadingOverlay').style.display = 'flex';
+    return;
+  }
+
   // Carrega placares oficiais
   const savedMatches = await fbGet('matches');
   if (savedMatches) {
@@ -1101,6 +1117,10 @@ async function init() {
   fbListen('users', data => {
     if (!data) return;
     users = data;
+    // Se o usuário logado ainda existe no Firebase, mantém sessão
+    if (currentUser && !currentUser.isAdmin && !users[currentUser.username]) {
+      doLogout(); return;
+    }
     renderRanking(); renderHomeRanking(); renderAdminUsers(); updateStats();
   });
 
@@ -1444,7 +1464,9 @@ async function doLogin() {
 }
 
 async function doRegister() {
-  const u = document.getElementById('regUser').value.trim();
+  const uRaw = document.getElementById('regUser').value.trim();
+  // Sanitiza: remove caracteres proibidos pelo Firebase (. # $ [ ] /)
+  const u = uRaw.replace(/[.#$\[\]/]/g, '_');
   const p = document.getElementById('regPass').value;
   const p2 = document.getElementById('regPass2').value;
   const err = document.getElementById('authError');
@@ -1458,8 +1480,12 @@ async function doRegister() {
   const existing = await fbGet('users/' + u);
   if (existing) { err.textContent = 'Este nome já está em uso.'; err.style.display='block'; return; }
 
-  // Salva no Firebase
-  await fbSet('users/' + u, { password: p, isAdmin: false, pts: 0, exact: 0, winner: 0 });
+  // Salva no Firebase e aguarda confirmação
+  try {
+    await fbSet('users/' + u, { password: p, isAdmin: false, pts: 0, exact: 0, winner: 0 });
+  } catch(e) {
+    err.textContent = 'Erro ao salvar. Verifique sua conexão.'; err.style.display='block'; return;
+  }
   users[u] = { password: p, isAdmin: false, pts: 0, exact: 0, winner: 0 };
 
   currentUser = { username: u, isAdmin: false };
