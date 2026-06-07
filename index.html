@@ -1356,16 +1356,35 @@ function renderAdminUsers() {
   if (!currentUser || !currentUser.isAdmin) return;
   const rows = Object.keys(users).map(uname => {
     const u = users[uname];
+    const deleteBtn = u.isAdmin ? '' : `<button onclick="deleteUser('${uname}')" style="background:rgba(200,16,46,0.15);border:1px solid rgba(200,16,46,0.3);color:#ff6680;font-family:'Barlow',sans-serif;font-size:11px;font-weight:600;padding:4px 10px;border-radius:6px;cursor:pointer;" onmouseover="this.style.background='rgba(200,16,46,0.3)'" onmouseout="this.style.background='rgba(200,16,46,0.15)'">🗑 Excluir</button>`;
     return `<tr>
       <td>${uname}</td>
       <td>${u.isAdmin ? '<span style="color:var(--gold);font-size:11px;font-weight:700">ADMIN</span>' : 'Usuário'}</td>
-      <td style="text-align:right;font-family:\'Bebas Neue\';font-size:18px;color:var(--green-light)">${u.pts || 0}</td>
+      <td style="text-align:right;font-family:'Bebas Neue';font-size:18px;color:var(--green-light)">${u.pts || 0}</td>
+      <td style="text-align:right">${deleteBtn}</td>
     </tr>`;
   }).join('');
   el.innerHTML = `<table class="admin-users-table">
-    <thead><tr><th>Usuário</th><th>Tipo</th><th style="text-align:right">Pontos</th></tr></thead>
-    <tbody>${rows || '<tr><td colspan="3" style="color:var(--text3)">Nenhum usuário cadastrado</td></tr>'}</tbody>
+    <thead><tr><th>Usuário</th><th>Tipo</th><th style="text-align:right">Pontos</th><th></th></tr></thead>
+    <tbody>${rows || '<tr><td colspan="4" style="color:var(--text3)">Nenhum usuário cadastrado</td></tr>'}</tbody>
   </table>`;
+}
+
+async function deleteUser(username) {
+  if (!confirm(`Tem certeza que deseja excluir o usuário "${username}"? Esta ação não pode ser desfeita.`)) return;
+  try {
+    // Remove usuário e palpites do Firebase
+    await fbSet('users/' + username, null);
+    await fbSet('palpites/' + username, null);
+    delete users[username];
+    renderAdminUsers();
+    renderRanking();
+    renderHomeRanking();
+    updateStats();
+    showToast(`🗑 Usuário "${username}" excluído.`);
+  } catch(e) {
+    showToast('❌ Erro ao excluir usuário.');
+  }
 }
 
 function populateAdminSelect() {
